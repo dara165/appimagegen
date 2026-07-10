@@ -1,0 +1,55 @@
+name: Convert Archives to AppImage
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'Comma- or newline-separated list of URLs pointing to archives (.tar.xz, .zip, .rar, .7z, etc.)'
+        required: true
+        type: string
+        default: 'https://github.com/muesli/duf/releases/download/v0.8.1/duf_0.8.1_linux_amd64.tar.gz'
+      app_name:
+        description: 'Custom App Name (Optional, auto-detected if left blank)'
+        required: false
+        type: string
+        default: ''
+      executable_path:
+        description: 'Relative path to main executable (Optional, auto-detected if left blank)'
+        required: false
+        type: string
+        default: ''
+      icon_url:
+        description: 'URL to a custom icon (.png or .svg) (Optional)'
+        required: false
+        type: string
+        default: ''
+      fail_fast:
+        description: 'Fail immediately on any single failure when converting multiple URLs'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  convert:
+    name: Build AppImages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Converter Action
+        id: convert
+        uses: ./
+        with:
+          urls: ${{ inputs.urls }}
+          app_name: ${{ inputs.app_name }}
+          executable_path: ${{ inputs.executable_path }}
+          icon_url: ${{ inputs.icon_url }}
+          fail_fast: ${{ inputs.fail_fast }}
+
+      - name: Upload AppImage Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: converted-appimages
+          path: ${{ steps.convert.outputs.appimages_dir }}/*.AppImage
+          if-no-files-found: error
