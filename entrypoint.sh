@@ -69,7 +69,7 @@ while read -r url; do
     echo "::error::Download failed for $url."
     echo "Curl exit code: $curl_exit, HTTP status code: $http_code"
     failure_list+=("$url (Download Failed - HTTP $http_code)")
-    ((failure_count++))
+    failure_count=$((failure_count + 1))
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
   fi
@@ -140,7 +140,7 @@ while read -r url; do
   if [ "$extract_success" = "false" ]; then
     echo "::error::Could not extract archive from $url. The format might be unsupported, or the file is corrupted."
     failure_list+=("$url (Extraction Failed)")
-    ((failure_count++))
+    failure_count=$((failure_count + 1))
     rm -f "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -263,7 +263,7 @@ while read -r url; do
     echo "============================================="
     
     failure_list+=("$url (No executable detected)")
-    ((failure_count++))
+    failure_count=$((failure_count + 1))
     rm -rf "$extract_dir" "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -412,7 +412,7 @@ EOF
     fi
     
     failure_list+=("$url (AppImage Packaging Failed)")
-    ((failure_count++))
+    failure_count=$((failure_count + 1))
     rm -rf "$extract_dir" "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -422,11 +422,11 @@ EOF
     chmod +x "$output_appimage"
     echo "::notice::Successfully created AppImage: $(basename "$output_appimage")"
     success_list+=("$url -> $(basename "$output_appimage")")
-    ((success_count++))
+    success_count=$((success_count + 1))
   else
     echo "::error::appimagetool finished without errors, but output file is missing!"
     failure_list+=("$url (Output missing)")
-    ((failure_count++))
+    failure_count=$((failure_count + 1))
   fi
 
   # Cleanup temporary directory
