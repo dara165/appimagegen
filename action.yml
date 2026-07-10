@@ -1,0 +1,43 @@
+name: 'Archive to AppImage Converter'
+description: 'Download precompiled archives (.tar.xz, .zip, .rar, etc.) and package them into AppImages.'
+author: 'Antigravity'
+inputs:
+  urls:
+    description: 'Comma- or newline-separated list of URLs containing precompiled binaries in archives.'
+    required: true
+  app_name:
+    description: 'Custom name for the application. If not provided, it will be auto-detected from the URL filename.'
+    required: false
+    default: ''
+  executable_path:
+    description: 'Manual path to the main executable inside the extracted archive. If not provided, we will auto-detect it.'
+    required: false
+    default: ''
+  icon_url:
+    description: 'URL to an icon (.png or .svg) to bundle. If not provided, a default icon is used.'
+    required: false
+    default: ''
+  fail_fast:
+    description: 'Fail the action immediately on any single failure when converting multiple URLs.'
+    required: false
+    default: 'false'
+outputs:
+  appimages_dir:
+    description: 'Directory containing the generated AppImages.'
+    value: ${{ steps.convert.outputs.appimages_dir }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Run Archive to AppImage Conversion
+      id: convert
+      shell: bash
+      run: |
+        chmod +x "${{ github.action_path }}/entrypoint.sh"
+        "${{ github.action_path }}/entrypoint.sh"
+      env:
+        INPUT_URLS: ${{ inputs.urls }}
+        INPUT_APP_NAME: ${{ inputs.app_name }}
+        INPUT_EXECUTABLE_PATH: ${{ inputs.executable_path }}
+        INPUT_ICON_URL: ${{ inputs.icon_url }}
+        INPUT_FAIL_FAST: ${{ inputs.fail_fast }}
+        ACTION_PATH: ${{ github.action_path }}
