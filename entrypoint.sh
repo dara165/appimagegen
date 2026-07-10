@@ -335,9 +335,16 @@ EOF
   existing_desktop=$(find "$app_dir" -type f -name "*.desktop" -print -quit)
   if [ -n "$existing_desktop" ]; then
     cp "$existing_desktop" "$app_dir/${app_name_slug}.desktop"
-    # Update Exec and Icon lines in the copied desktop file to standard values
-    sed -i "s|^Exec=.*|Exec=AppRun|" "$app_dir/${app_name_slug}.desktop" || true
-    sed -i "s|^Icon=.*|Icon=${app_name_slug}|" "$app_dir/${app_name_slug}.desktop" || true
+    # Update Exec and Icon lines in the copied desktop file to standard values using robust regex
+    sed -i -E "s|^[[:space:]]*Exec[[:space:]]*=.*|Exec=AppRun|" "$app_dir/${app_name_slug}.desktop" || true
+    sed -i -E "s|^[[:space:]]*Icon[[:space:]]*=.*|Icon=${app_name_slug}|" "$app_dir/${app_name_slug}.desktop" || true
+    
+    # Clean up deprecated/invalid keys like %k that cause desktop-file-validate to fail
+    sed -i "/^Version=/d" "$app_dir/${app_name_slug}.desktop" || true
+    
+    # Remove all other desktop files at the root of app_dir to prevent appimagetool from getting confused
+    find "$app_dir" -maxdepth 1 -name "*.desktop" ! -name "${app_name_slug}.desktop" -delete 2>/dev/null || true
+    
     desktop_found=true
     echo "Using and updating desktop file from archive: $existing_desktop"
   fi
@@ -364,6 +371,31 @@ EOF
   "$APPIMAGETOOL_BIN" "$app_dir" "$output_appimage" > /tmp/appimagetool_out.log 2> "$err_log"
   tool_exit=$?
   set -e
+
+  # SMART SELF-HEALING: If packaging failed due to desktop file errors, generate a clean, minimal one and retry!
+  if [ "$tool_exit" -ne 0 ] && grep -q -i "desktop" "$err_log" 2>/dev/null; then
+    echo "::warning::appimagetool failed due to desktop entry validation. Attempting self-healing fallback by generating a clean, minimal desktop entry..."
+    
+    # Remove all desktop files at root
+    find "$app_dir" -maxdepth 1 -name "*.desktop" -delete 2>/dev/null || true
+    
+    # Generate minimal, 100% compliant desktop file
+    cat << EOF > "$app_dir/${app_name_slug}.desktop"
+[Desktop Entry]
+Type=Application
+Name=${app_name}
+Exec=AppRun
+Icon=${app_name_slug}
+Categories=Utility;
+Comment=AppImage generated from archive
+EOF
+    
+    echo "Retrying packaging with minimal desktop entry..."
+    set +e
+    "$APPIMAGETOOL_BIN" "$app_dir" "$output_appimage" > /tmp/appimagetool_out.log 2> "$err_log"
+    tool_exit=$?
+    set -e
+  fi
 
   if [ "$tool_exit" -ne 0 ]; then
     echo "::error::appimagetool execution failed!"
