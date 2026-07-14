@@ -1,9 +1,9 @@
 name: 'Archive to AppImage Converter'
-description: 'Download precompiled archives (.tar.xz, .zip, .rar, etc.) and package them into AppImages.'
+description: 'Download precompiled archives or Debian packages (.tar.xz, .zip, .rar, .deb, etc.) and package them into AppImages.'
 author: 'Antigravity'
 inputs:
   urls:
-    description: 'Comma- or newline-separated list of URLs containing precompiled binaries in archives.'
+    description: 'Comma- or newline-separated list of URLs containing precompiled binaries in archives or .deb packages.'
     required: true
   app_name:
     description: 'Custom name for the application. If not provided, it will be auto-detected from the URL filename.'
