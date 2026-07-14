@@ -21,7 +21,7 @@ fi
 # 1. Install dependencies
 echo "::group::Installing extraction tools and dependencies..."
 sudo apt-get update -y || true
-sudo apt-get install -y p7zip-full unrar xz-utils file binutils curl wget || true
+sudo apt-get install -y p7zip-full unrar xz-utils file binutils curl wget dpkg-dev || true
 echo "::endgroup::"
 
 # 2. Download and extract appimagetool (FUSE-free version)
@@ -69,7 +69,7 @@ while read -r url; do
     echo "::error::Download failed for $url."
     echo "Curl exit code: $curl_exit, HTTP status code: $http_code"
     failure_list+=("$url (Download Failed - HTTP $http_code)")
-    ((failure_count++))
+    ((failure_count+=1))
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
   fi
@@ -77,15 +77,18 @@ while read -r url; do
   # B. Extract the archive
   extract_dir="/tmp/extracted_$archive_name"
   mkdir -p "$extract_dir"
-  
   echo "Detecting MIME type and extracting archive..."
   file_type=$(file -b --mime-type "$download_file" || echo "unknown")
   echo "Detected MIME-type: $file_type"
 
   extract_success=false
+  is_deb_package=false
 
   set +e
   case "$file_type" in
+    application/vnd.debian.binary-package)
+      dpkg-deb -x "$download_file" "$extract_dir" && extract_success=true && is_deb_package=true
+      ;;
     application/zip|application/x-zip-compressed)
       unzip -q -o "$download_file" -d "$extract_dir" && extract_success=true
       ;;
@@ -109,6 +112,9 @@ while read -r url; do
   if [ "$extract_success" = "false" ]; then
     echo "Attempting fallback extraction based on file extension..."
     case "$archive_name" in
+      *.deb)
+        dpkg-deb -x "$download_file" "$extract_dir" && extract_success=true && is_deb_package=true
+        ;;
       *.zip)
         unzip -q -o "$download_file" -d "$extract_dir" && extract_success=true
         ;;
@@ -127,7 +133,10 @@ while read -r url; do
   # Final general fallback try
   if [ "$extract_success" = "false" ]; then
     echo "MIME-type/extension extraction failed. Trying general extraction fallbacks..."
-    if 7z x -y -o"$extract_dir" "$download_file" >/dev/null 2>&1; then
+    if dpkg-deb -x "$download_file" "$extract_dir" >/dev/null 2>&1; then
+      extract_success=true
+      is_deb_package=true
+    elif 7z x -y -o"$extract_dir" "$download_file" >/dev/null 2>&1; then
       extract_success=true
     elif tar -xf "$download_file" -C "$extract_dir" 2>/dev/null; then
       extract_success=true
@@ -140,7 +149,7 @@ while read -r url; do
   if [ "$extract_success" = "false" ]; then
     echo "::error::Could not extract archive from $url. The format might be unsupported, or the file is corrupted."
     failure_list+=("$url (Extraction Failed)")
-    ((failure_count++))
+    ((failure_count+=1))
     rm -f "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -149,7 +158,7 @@ while read -r url; do
   # C. Clean up single-folder wrappers (normalize directory)
   # If extraction contains exactly one sub-directory and no other files, step inside
   num_items=$(find "$extract_dir" -maxdepth 1 -mindepth 1 | wc -l)
-  if [ "$num_items" -eq 1 ]; then
+  if [ "$num_items" -eq 1 ] && [ "$is_deb_package" = "false" ]; then
     single_item=$(find "$extract_dir" -maxdepth 1 -mindepth 1)
     if [ -d "$single_item" ]; then
       app_dir="$single_item"
@@ -167,17 +176,15 @@ while read -r url; do
     if [ "$total_urls" -eq 1 ]; then
       app_name="$INPUT_APP_NAME"
     else
-      app_name="${INPUT_APP_NAME}_$(echo "$archive_name" | sed -E 's/\.(tar\.(xz|gz|bz2)|tgz|zip|rar|7z)$//I')"
+      app_name="${INPUT_APP_NAME}_$(echo "$archive_name" | sed -E 's/\.(tar\.(xz|gz|bz2)|tgz|zip|rar|7z|deb)$//I')"
     fi
   else
-    app_name=$(echo "$archive_name" | sed -E 's/\.(tar\.(xz|gz|bz2)|tgz|zip|rar|7z)$//I')
+    app_name=$(echo "$archive_name" | sed -E 's/\.(tar\.(xz|gz|bz2)|tgz|zip|rar|7z|deb)$//I')
   fi
   app_name_slug=$(echo "$app_name" | sed 's/[^a-zA-Z0-9_-]/_/g' | tr '[:upper:]' '[:lower:]')
 
   # E. Auto-detect main executable
   binary_path=""
-
-  # Heuristic 1: User-specified executable path
   if [ -n "$INPUT_EXECUTABLE_PATH" ]; then
     if [ -f "$app_dir/$INPUT_EXECUTABLE_PATH" ]; then
       binary_path="$app_dir/$INPUT_EXECUTABLE_PATH"
@@ -186,24 +193,40 @@ while read -r url; do
       echo "::warning::Manually specified executable_path '$INPUT_EXECUTABLE_PATH' not found at '$app_dir/$INPUT_EXECUTABLE_PATH'."
     fi
   fi
-
-  # Heuristic 2: Look for existing .desktop files and parse Exec key
   if [ -z "$binary_path" ]; then
-    desktop_files=$(find "$app_dir" -type f -name "*.desktop")
-    if [ -n "$desktop_files" ]; then
-      for df in $desktop_files; do
-        exec_val=$(grep -m1 "^Exec=" "$df" | cut -d= -f2- | awk '{print $1}')
-        if [ -n "$exec_val" ]; then
-          # Search for file matching this binary name
-          found_bin=$(find "$app_dir" -type f -name "$exec_val" -print -quit)
-          if [ -n "$found_bin" ]; then
-            binary_path="$found_bin"
-            echo "Detected executable via desktop entry ($df): $binary_path"
-            break
-          fi
+    while IFS= read -r -d '' df; do
+      exec_val=$(grep -m1 '^Exec=' "$df" | cut -d= -f2-)
+      exec_val=$(echo "$exec_val" | sed -E 's/%[fFuUdDnNickvm]//g; s/[[:space:]]+$//; s/^"(.*)"$/\1/')
+      exec_val=$(echo "$exec_val" | awk '{print $1}')
+      if [ -n "$exec_val" ]; then
+        if [ -x "$app_dir/$exec_val" ]; then
+          binary_path="$app_dir/$exec_val"
+          echo "Detected executable via desktop entry ($df): $binary_path"
+          break
         fi
-      done
-    fi
+        found_bin=$(find "$app_dir" -type f \( -name "$exec_val" -o -name "$(basename "$exec_val")" \) -print -quit)
+        if [ -n "$found_bin" ] && [ -x "$found_bin" ]; then
+          binary_path="$found_bin"
+          echo "Detected executable via desktop entry ($df): $binary_path"
+          break
+        fi
+      fi
+    done < <(find "$app_dir" -type f -name "*.desktop" -print0)
+  fi
+
+  # Debian packages commonly install binaries under /usr/bin matching desktop Exec basename.
+  if [ -z "$binary_path" ] && [ "$is_deb_package" = "true" ]; then
+    while IFS= read -r -d '' df; do
+      exec_val=$(grep -m1 '^Exec=' "$df" | cut -d= -f2-)
+      exec_val=$(echo "$exec_val" | sed -E 's/%[fFuUdDnNickvm]//g; s/[[:space:]]+$//; s/^"(.*)"$/\1/')
+      exec_val=$(echo "$exec_val" | awk '{print $1}')
+      exec_base=$(basename "$exec_val")
+      if [ -n "$exec_base" ] && [ -x "$app_dir/usr/bin/$exec_base" ]; then
+        binary_path="$app_dir/usr/bin/$exec_base"
+        echo "Detected executable via Debian desktop Exec basename ($df): $binary_path"
+        break
+      fi
+    done < <(find "$app_dir/usr/share/applications" -type f -name "*.desktop" -print0 2>/dev/null)
   fi
 
   # Heuristic 3: Look for ELF binaries matching the slug/app name
@@ -213,7 +236,7 @@ while read -r url; do
       found_bin=$(find "$app_dir" -type f -iname "*$app_name_slug*" -print -quit)
     fi
     if [ -n "$found_bin" ]; then
-      if file -b "$found_bin" | grep -qE "ELF|executable|script"; then
+      if [ -x "$found_bin" ] && file -b "$found_bin" | grep -qE "ELF|executable|script"; then
         binary_path="$found_bin"
         echo "Detected executable matching app name: $binary_path"
       fi
@@ -222,12 +245,12 @@ while read -r url; do
 
   # Heuristic 4: Search for any ELF executable in standard locations (bin/ or root)
   if [ -z "$binary_path" ]; then
-    elf_binaries=$(find "$app_dir" -type f -exec sh -c 'file -b "$1" | grep -q "ELF.*executable"' _ {} \; -print)
+    elf_binaries=$(find "$app_dir" -type f -perm -u+x -exec sh -c 'file -b "$1" | grep -qE "ELF.*executable|POSIX shell script|Python script|Perl script|text executable"' _ {} \; -print)
     if [ -n "$elf_binaries" ]; then
       best_elf=""
       for elf in $elf_binaries; do
         dir_of_elf=$(dirname "$elf")
-        if [ "$dir_of_elf" = "$app_dir" ] || [ "$(basename "$dir_of_elf")" = "bin" ]; then
+        if [ "$dir_of_elf" = "$app_dir" ] || [ "$(basename "$dir_of_elf")" = "bin" ] || [ "$(basename "$dir_of_elf")" = "usr" ]; then
           best_elf="$elf"
           break
         fi
@@ -242,7 +265,7 @@ while read -r url; do
 
   # Heuristic 5: Search for executable scripts (shell, Python, etc.) at root/bin
   if [ -z "$binary_path" ]; then
-    scripts=$(find "$app_dir" -maxdepth 2 -type f -executable -exec sh -c 'file -b "$1" | grep -qE "shell script|Python script"' _ {} \; -print)
+    scripts=$(find "$app_dir" -maxdepth 2 -type f -executable -exec sh -c 'file -b "$1" | grep -qE "shell script|Python script|Perl script|Ruby script"' _ {} \; -print)
     if [ -n "$scripts" ]; then
       binary_path=$(echo "$scripts" | head -n 1)
       echo "Detected executable script: $binary_path"
@@ -263,7 +286,7 @@ while read -r url; do
     echo "============================================="
     
     failure_list+=("$url (No executable detected)")
-    ((failure_count++))
+    ((failure_count+=1))
     rm -rf "$extract_dir" "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -290,6 +313,10 @@ while read -r url; do
   cat << EOF > "$app_dir/AppRun"
 #!/bin/sh
 SELF=\$(dirname "\$(readlink -f "\$0")")
+export APPDIR="\$SELF"
+export PATH="\$SELF/usr/bin:\$SELF/usr/sbin:\$SELF/bin:\$PATH"
+export LD_LIBRARY_PATH="\$SELF/usr/lib:\$SELF/usr/lib64:\$SELF/usr/lib/\$(uname -m)-linux-gnu:\$SELF/lib:\$SELF/lib64:\${LD_LIBRARY_PATH:-}"
+export XDG_DATA_DIRS="\$SELF/usr/share:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec "\$SELF/$binary_rel_path" "\$@"
 EOF
   chmod +x "$app_dir/AppRun"
@@ -309,7 +336,7 @@ EOF
 
   if [ "$icon_found" = "false" ]; then
     # Look for png/svg in the extracted archive
-    img_files=$(find "$app_dir" -type f -name "*.png" -o -name "*.svg" | sort)
+    img_files=$(find "$app_dir" -type f \( -name "*.png" -o -name "*.svg" \) | sort)
     if [ -n "$img_files" ]; then
       best_img=$(echo "$img_files" | head -n 1)
       best_img_ext="${best_img##*.}"
@@ -378,9 +405,43 @@ EOF
     elif grep -q -i "FUSE" "$err_log" 2>/dev/null; then
       echo "Diagnostic: A FUSE mounting failure occurred. Verify FUSE execution bypassing configuration."
     fi
+
+    echo "Retrying with a minimal fallback AppDir..."
+    fallback_dir="/tmp/fallback_${app_name_slug}"
+    rm -rf "$fallback_dir"
+    mkdir -p "$fallback_dir"
+    fallback_binary_name=$(basename "$binary_path")
+    cat << EOF > "$fallback_dir/AppRun"
+#!/bin/sh
+SELF=\$(dirname "\$(readlink -f "\$0")")
+exec "\$SELF/$fallback_binary_name" "\$@"
+EOF
+    chmod +x "$fallback_dir/AppRun"
+    cp "$binary_path" "$fallback_dir/$fallback_binary_name"
+    cp "$app_dir/${app_name_slug}.desktop" "$fallback_dir/${app_name_slug}.desktop"
+    if [ -f "$app_dir/${app_name_slug}.svg" ]; then
+      cp "$app_dir/${app_name_slug}.svg" "$fallback_dir/${app_name_slug}.svg"
+    elif [ -f "$app_dir/${app_name_slug}.png" ]; then
+      cp "$app_dir/${app_name_slug}.png" "$fallback_dir/${app_name_slug}.png"
+    fi
+    sed -i "s|^Exec=.*|Exec=$fallback_binary_name|" "$fallback_dir/${app_name_slug}.desktop" || true
+    set +e
+    "$APPIMAGETOOL_BIN" "$fallback_dir" "$output_appimage" > /tmp/appimagetool_out.log 2> "$err_log"
+    tool_exit=$?
+    set -e
+    rm -rf "$fallback_dir"
+
+    if [ "$tool_exit" -eq 0 ] && [ -f "$output_appimage" ]; then
+      chmod +x "$output_appimage"
+      echo "::notice::Successfully created AppImage on retry: $(basename "$output_appimage")"
+      success_list+=("$url -> $(basename "$output_appimage")")
+      ((success_count+=1))
+      rm -rf "$extract_dir" "$download_file"
+      continue
+    fi
     
     failure_list+=("$url (AppImage Packaging Failed)")
-    ((failure_count++))
+    ((failure_count+=1))
     rm -rf "$extract_dir" "$download_file"
     [ "$INPUT_FAIL_FAST" = "true" ] && exit 1
     continue
@@ -390,11 +451,11 @@ EOF
     chmod +x "$output_appimage"
     echo "::notice::Successfully created AppImage: $(basename "$output_appimage")"
     success_list+=("$url -> $(basename "$output_appimage")")
-    ((success_count++))
+    ((success_count+=1))
   else
     echo "::error::appimagetool finished without errors, but output file is missing!"
     failure_list+=("$url (Output missing)")
-    ((failure_count++))
+    ((failure_count+=1))
   fi
 
   # Cleanup temporary directory
