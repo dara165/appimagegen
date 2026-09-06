@@ -1,18 +1,22 @@
 {
   "name": "Codespace Agentic Hub (OpenCode, Paseo, ttyd)",
-  "forwardPorts": [7681, 4096, 6767],
+  "forwardPorts": [4096, 6767, 7681],
   "portsAttributes": {
-    "7681": {
-      "label": "ttyd Web Terminal",
-      "visibility": "public"
-    },
     "4096": {
       "label": "OpenCode Web UI",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "7681": {
+      "label": "ttyd Web Terminal",
+      "onAutoForward": "ignore",
       "visibility": "public"
     },
     "6767": {
       "label": "Paseo Web UI",
+      "onAutoForward": "ignore",
       "visibility": "public"
     }
-  }
+  },
+  "postStartCommand": "sudo /usr/local/bin/codespace-supervisor.sh --check-once"
 }
