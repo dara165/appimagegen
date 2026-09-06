@@ -1,0 +1,18 @@
+{
+  "name": "Codespace Agentic Hub (OpenCode, Paseo, ttyd)",
+  "forwardPorts": [7681, 4096, 6767],
+  "portsAttributes": {
+    "7681": {
+      "label": "ttyd Web Terminal",
+      "visibility": "public"
+    },
+    "4096": {
+      "label": "OpenCode Web UI",
+      "visibility": "public"
+    },
+    "6767": {
+      "label": "Paseo Web UI",
+      "visibility": "public"
+    }
+  }
+}
