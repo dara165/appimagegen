@@ -1,0 +1,22 @@
+{
+  "name": "Codespace Agentic Hub (OpenCode, Paseo, ttyd)",
+  "forwardPorts": [4096, 6767, 7681],
+  "portsAttributes": {
+    "4096": {
+      "label": "OpenCode Web UI",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "7681": {
+      "label": "ttyd Web Terminal",
+      "onAutoForward": "ignore",
+      "visibility": "public"
+    },
+    "6767": {
+      "label": "Paseo Web UI",
+      "onAutoForward": "ignore",
+      "visibility": "public"
+    }
+  },
+  "postStartCommand": "sudo cp -f .devcontainer/codespace-supervisor.sh /usr/local/bin/codespace-supervisor.sh && sudo chmod +x /usr/local/bin/codespace-supervisor.sh && sudo nohup /usr/local/bin/codespace-supervisor.sh </dev/null > /tmp/supervisor.log 2>&1 &"
+}
